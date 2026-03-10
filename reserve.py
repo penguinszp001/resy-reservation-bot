@@ -1,4 +1,4 @@
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import time
 from datetime import datetime
 import logging
@@ -8,11 +8,22 @@ import os
 # CONFIG
 ############################
 
-TARGET_RESERVATION_TIME = "7:00 PM"
-TARGET_RUN_TIME = "17:51:40"   # 24hr time when reservations open
+TARGET_RESERVATION_TIME = "8:30 PM"
+TARGET_RUN_TIME = "21:30:20"   # 24hr time when reservations open
 RELOAD_INTERVAL = 0.75         # seconds between refresh attempts
 
-URL = "https://resy.com/cities/jamaica-plain-ma-ma/venues/tres-gatos?date=2026-03-24&seats=2"
+# URL = "https://resy.com/cities/jamaica-plain-ma-ma/venues/tres-gatos?date=2026-03-24&seats=2"
+URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
+
+# How long to wait for confirmation after clicking final confirm.
+POST_CONFIRM_TIMEOUT_MS = 20000
+
+# Update these if you find better selectors/text from your success page.
+POST_CONFIRM_SUCCESS_SELECTORS = [
+    '[data-test-id="booking-confirmation"]',
+    '[data-test-id="reservation-confirmation"]',
+    'text=/confirmed|reservation confirmed|you\'re booked/i',
+]
 
 
 ############################
@@ -29,14 +40,81 @@ logging.basicConfig(
     format="%(asctime)s - %(message)s"
 )
 
+
 def log(msg):
     print(msg)
     logging.info(msg)
 
 
+def find_visible_button_context(page, selector, timeout_ms=20000, poll_ms=150):
+    """
+    Return (context_name, context_obj, locator) for the first visible selector.
+    Context can be page or any loaded frame.
+    """
+    deadline = time.time() + (timeout_ms / 1000)
+
+    while time.time() < deadline:
+        try:
+            page_locator = page.locator(selector)
+            if page_locator.count() > 0 and page_locator.first.is_visible():
+                return "page", page, page_locator.first
+        except Exception:
+            pass
+
+        for frame in page.frames:
+            try:
+                frame_locator = frame.locator(selector)
+                if frame_locator.count() > 0 and frame_locator.first.is_visible():
+                    return "frame", frame, frame_locator.first
+            except Exception:
+                # Cross-origin frame can be in a transient state while loading.
+                continue
+
+        time.sleep(poll_ms / 1000)
+
+    return None, None, None
+
+
+def click_with_fallback(locator):
+    """Try normal click first, then JS click if Playwright actionability blocks."""
+    locator.scroll_into_view_if_needed()
+
+    try:
+        locator.click(timeout=5000)
+    except Exception:
+        locator.click(force=True, timeout=5000)
+
+
+def wait_for_post_confirm_success(page, timeout_ms=POST_CONFIRM_TIMEOUT_MS):
+    """Wait for a strong signal that reservation submission has completed."""
+    deadline = time.time() + (timeout_ms / 1000)
+
+    while time.time() < deadline:
+        # 1) URL signal
+        try:
+            current_url = page.url.lower()
+            if any(token in current_url for token in ["confirm", "confirmed", "booking", "itinerary"]):
+                log(f"Post-confirm URL indicates success flow: {page.url}")
+                return True
+        except Exception:
+            pass
+
+        # 2) Known confirmation UI signals on page or frames
+        for selector in POST_CONFIRM_SUCCESS_SELECTORS:
+            context_name, _, success_locator = find_visible_button_context(page, selector, timeout_ms=600, poll_ms=100)
+            if success_locator is not None:
+                log(f"Detected confirmation signal ({selector}) in {context_name}")
+                return True
+
+        time.sleep(0.2)
+
+    return False
+
+
 ############################
 # WAIT FOR EXACT TIME
 ############################
+
 
 def wait_until_target():
     now = datetime.now()
@@ -82,7 +160,7 @@ with sync_playwright() as p:
         # wait for reservation buttons to render
         try:
             page.wait_for_selector(".ReservationButton", timeout=5000)
-        except:
+        except PlaywrightTimeoutError:
             log("Reservation buttons not found, retrying...")
             time.sleep(RELOAD_INTERVAL)
             continue
@@ -104,49 +182,48 @@ with sync_playwright() as p:
                 break
 
         if found:
-            log("Waiting for booking iframe to appear")
+            log("Waiting for Reserve Now button in page/iframe")
 
-            frame = None
-            for f in page.frames:
-                if "resy.com/cities/jamaica-plain-ma-ma/venues/tres-gatos" in f.url:
-                    frame = f
-                    break
+            reserve_selector = '[data-test-id="order_summary_page-button-book"]'
+            context_name, booking_context, reserve_button = find_visible_button_context(
+                page,
+                reserve_selector,
+                timeout_ms=20000
+            )
 
-            if frame:
-                with open("booking_frame.html", "w") as f:
-                    f.write(frame.content())
-                log("Saved booking frame DOM to booking_frame.html")
-
-            # Wait for Resy booking iframe
-            page.wait_for_selector("iframe", timeout=10000)
-            frame = None
-            for f in page.frames:
-                if "resy" in f.url:
-                    frame = f
-                    break
-            if frame is None:
-                log("Could not find Resy booking iframe")
+            if reserve_button is None:
+                log("Could not find a visible Reserve Now button")
                 continue
 
-            log(f"Found booking frame: {frame.url}")
+            context_url = booking_context.url if context_name == "frame" else page.url
+            log(f"Found Reserve Now in {context_name}: {context_url}")
 
-            # Click Reserve Now
-            reserve_button = frame.locator('[data-test-id="order_summary_page-button-book"]')
-            reserve_button.wait_for(state="visible", timeout=1000000)
-            reserve_button.scroll_into_view_if_needed()
-            reserve_button.click()
+            reserve_button.wait_for(state="visible", timeout=15000)
+            click_with_fallback(reserve_button)
             log("Clicked Reserve Now")
 
-            # Wait for confirm button to appear (same selector)
-            confirm_button = frame.locator('[data-test-id="order_summary_page-button-book"]')
+            # The confirm step reuses the same selector in many Resy flows.
+            _, _, confirm_button = find_visible_button_context(
+                page,
+                reserve_selector,
+                timeout_ms=10000
+            )
+            if confirm_button is None:
+                log("Confirm button not visible after Reserve Now click")
+                continue
+
             confirm_button.wait_for(state="visible", timeout=10000)
-            confirm_button.scroll_into_view_if_needed()
-            confirm_button.click()
+            click_with_fallback(confirm_button)
             log("Clicked Confirm Reservation")
 
-            log("Reservation attempt completed")
-            browser.close()
-            exit()
+            if wait_for_post_confirm_success(page):
+                log("Reservation confirmed by post-confirm verification checks")
+                browser.close()
+                exit()
+
+            log("Post-confirm verification did not detect success; leaving browser open for manual check")
+            page.pause()
+
 
         log("Target slot not found yet")
         time.sleep(RELOAD_INTERVAL)
