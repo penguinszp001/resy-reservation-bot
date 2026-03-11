@@ -1,0 +1,17 @@
+services:
+  resy-bot:
+    build: .
+    container_name: resy-reservation-bot
+    stdin_open: true
+    tty: true
+    environment:
+      TARGET_RESERVATION_TIME: ${TARGET_RESERVATION_TIME}
+      TARGET_RUN_TIME: ${TARGET_RUN_TIME}
+      RELOAD_INTERVAL: ${RELOAD_INTERVAL}
+      URL: ${URL}
+    volumes:
+      - ./logging:/app/logging
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    network_mode: host
+    ipc: host
+    user: root
