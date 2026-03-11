@@ -8,12 +8,13 @@ import os
 # CONFIG
 ############################
 
-TARGET_RESERVATION_TIME = "8:30 PM"
-TARGET_RUN_TIME = "21:30:20"   # 24hr time when reservations open
+TARGET_RESERVATION_TIME = "7:30 PM"
+TARGET_RUN_TIME = "12:00:00"   # 24hr time when reservations open
 RELOAD_INTERVAL = 0.75         # seconds between refresh attempts
 
 # URL = "https://resy.com/cities/jamaica-plain-ma-ma/venues/tres-gatos?date=2026-03-24&seats=2"
-URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
+# URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
+URL = "https://resy.com/cities/boston-ma/venues/tonino?date=2026-04-09&seats=2"
 
 # How long to wait for confirmation after clicking final confirm.
 POST_CONFIRM_TIMEOUT_MS = 20000
