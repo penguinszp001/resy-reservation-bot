@@ -9,6 +9,7 @@ services:
       TARGET_RUN_TIME: ${TARGET_RUN_TIME}
       RELOAD_INTERVAL: ${RELOAD_INTERVAL}
       URL: ${URL}
+      DISPLAY: ${DISPLAY}
     volumes:
       - ./logging:/app/logging
       - /tmp/.X11-unix:/tmp/.X11-unix

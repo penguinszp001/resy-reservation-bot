@@ -61,13 +61,14 @@ cp .env.example .env
 
 Edit `.env` values for your target run.
 
-### 2) Allow container to use your X display (Linux)
+### 2) Allow Docker access to your Linux X display
 
 ```bash
+export DISPLAY=${DISPLAY:-:0}
 xhost +local:root
 ```
 
-> The Playwright browser is launched in headed mode (`headless=False`), so X forwarding is required.
+This is required because the script launches Chromium in headed mode (`headless=False`) for manual login.
 
 ### 3) Build and run
 

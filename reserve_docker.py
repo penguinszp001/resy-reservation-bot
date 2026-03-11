@@ -180,10 +180,16 @@ def main():
     )
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--start-maximized"]
-        )
+        try:
+            browser = p.chromium.launch(
+                headless=False,
+                args=["--start-maximized"]
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to launch headed Chromium. Ensure Docker can access your X server "
+                "(for example: export DISPLAY=:0 && xhost +local:root)."
+            ) from exc
         context = browser.new_context(viewport={"width": 1920, "height": 1080})
         page = context.new_page()
 
