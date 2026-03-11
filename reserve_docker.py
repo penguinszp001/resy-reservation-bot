@@ -12,6 +12,7 @@ DEFAULT_TARGET_RESERVATION_TIME = "8:30 PM"
 DEFAULT_TARGET_RUN_TIME = "21:30:20"   # 24hr time when reservations open
 DEFAULT_RELOAD_INTERVAL = 0.75          # seconds between refresh attempts
 DEFAULT_URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
+DEFAULT_LOGIN_WAIT_SECONDS = 120
 
 # How long to wait for confirmation after clicking final confirm.
 POST_CONFIRM_TIMEOUT_MS = 20000
@@ -45,6 +46,18 @@ def get_reload_interval() -> float:
     return parsed
 
 
+def get_login_wait_seconds() -> int:
+    value = os.getenv("LOGIN_WAIT_SECONDS", str(DEFAULT_LOGIN_WAIT_SECONDS)).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("LOGIN_WAIT_SECONDS must be a whole number of seconds") from exc
+
+    if parsed < 0:
+        raise ValueError("LOGIN_WAIT_SECONDS must be 0 or greater")
+
+    return parsed
+
 def load_config() -> dict:
     target_reservation_time = get_required_env("TARGET_RESERVATION_TIME", DEFAULT_TARGET_RESERVATION_TIME)
     target_run_time = get_required_env("TARGET_RUN_TIME", DEFAULT_TARGET_RUN_TIME)
@@ -55,6 +68,7 @@ def load_config() -> dict:
         "TARGET_RUN_TIME": target_run_time,
         "RELOAD_INTERVAL": get_reload_interval(),
         "URL": get_required_env("URL", DEFAULT_URL),
+        "LOGIN_WAIT_SECONDS": get_login_wait_seconds(),
     }
 
 
@@ -169,6 +183,26 @@ def wait_until_target(target_run_time):
 ############################
 
 
+def wait_for_login(config):
+    login_wait_seconds = config["LOGIN_WAIT_SECONDS"]
+
+    if login_wait_seconds > 0:
+        log(
+            "Waiting {} seconds for manual Resy login before continuing...".format(login_wait_seconds)
+        )
+        time.sleep(login_wait_seconds)
+        return
+
+    try:
+        input("Log into Resy in the browser, then press ENTER here to continue...")
+    except EOFError:
+        fallback = DEFAULT_LOGIN_WAIT_SECONDS
+        log(
+            "Interactive input is unavailable. Waiting {} seconds before continuing...".format(fallback)
+        )
+        time.sleep(fallback)
+
+
 def main():
     config = load_config()
     log(
@@ -176,7 +210,8 @@ def main():
         f"TARGET_RESERVATION_TIME={config['TARGET_RESERVATION_TIME']}, "
         f"TARGET_RUN_TIME={config['TARGET_RUN_TIME']}, "
         f"RELOAD_INTERVAL={config['RELOAD_INTERVAL']}, "
-        f"URL={config['URL']}"
+        f"URL={config['URL']}, "
+        f"LOGIN_WAIT_SECONDS={config['LOGIN_WAIT_SECONDS']}"
     )
 
     with sync_playwright() as p:
@@ -196,7 +231,7 @@ def main():
         log("Opening venue page")
         page.goto(config["URL"])
 
-        input("Log into Resy in the browser, then press ENTER here to continue...")
+        wait_for_login(config)
 
         wait_until_target(config["TARGET_RUN_TIME"])
 

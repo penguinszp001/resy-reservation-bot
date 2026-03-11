@@ -29,6 +29,9 @@ For Docker usage, configure these values as environment variables:
 - `TARGET_RUN_TIME` — local machine time to start booking loop (`HH:MM:SS` 24h)
 - `RELOAD_INTERVAL` — delay between retries (seconds)
 - `URL` — exact Resy venue/date/seats URL
+- `LOGIN_WAIT_SECONDS` — login wait mode for Docker script:
+  - `0`: show interactive `press ENTER when logged in` prompt
+  - `>0`: skip prompt and wait fixed seconds (default `120`)
 
 `reserve_docker.py` validates and loads these values at startup.
 
@@ -60,6 +63,9 @@ cp .env.example .env
 ```
 
 Edit `.env` values for your target run.
+
+If you want the old interactive behavior, set `LOGIN_WAIT_SECONDS=0`.
+If you prefer automatic delay, set a positive value (for example `120`).
 
 ### 2) Allow Docker access to your Linux X display
 
