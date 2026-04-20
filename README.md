@@ -42,7 +42,15 @@ For Docker usage, configure these values as environment variables:
 
 ## Run locally (non-Docker)
 
-Keep using the existing script:
+`reserve.py` now uses the same `.env`-driven configuration as `reserve_docker.py`.
+
+Prepare a local env file:
+
+```bash
+cp .env.example .env
+```
+
+Then run locally:
 
 ```bash
 python reserve.py
@@ -100,7 +108,7 @@ Logs are written to `./logging` on your host.
 Both scripts perform the same booking flow:
 
 1. Open configured Resy venue URL in Chromium.
-2. Pause for manual login (`input(...)`).
+2. Perform scripted login if credentials are configured, otherwise pause for manual login.
 3. Wait until `TARGET_RUN_TIME`.
 4. Reload and scan visible reservation slots.
 5. Click slot matching `TARGET_RESERVATION_TIME`.

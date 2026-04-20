@@ -1,4 +1,5 @@
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from dotenv import load_dotenv
 import time
 from datetime import datetime
 import logging
@@ -8,13 +9,13 @@ import os
 # CONFIG
 ############################
 
-TARGET_RESERVATION_TIME = "7:30 PM"
-TARGET_RUN_TIME = "12:00:00"   # 24hr time when reservations open
-RELOAD_INTERVAL = 0.75         # seconds between refresh attempts
-
-# URL = "https://resy.com/cities/jamaica-plain-ma-ma/venues/tres-gatos?date=2026-03-24&seats=2"
-# URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
-URL = "https://resy.com/cities/boston-ma/venues/tonino?date=2026-04-09&seats=2"
+DEFAULT_TARGET_RESERVATION_TIME = "8:30 PM"
+DEFAULT_TARGET_RUN_TIME = "21:30:20"   # 24hr time when reservations open
+DEFAULT_RELOAD_INTERVAL = 0.75          # seconds between refresh attempts
+DEFAULT_URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
+DEFAULT_LOGIN_WAIT_SECONDS = 120
+DEFAULT_HEADLESS = True
+DEFAULT_LOGIN_TIMEOUT_MS = 15000
 
 # How long to wait for confirmation after clicking final confirm.
 POST_CONFIRM_TIMEOUT_MS = 20000
@@ -25,6 +26,81 @@ POST_CONFIRM_SUCCESS_SELECTORS = [
     '[data-test-id="reservation-confirmation"]',
     'text=/confirmed|reservation confirmed|you\'re booked/i',
 ]
+
+
+def get_required_env(name: str, default: str | None = None) -> str:
+    """Read an environment variable and raise a clear error if missing."""
+    value = os.getenv(name, default)
+    if value is None or value.strip() == "":
+        raise ValueError(f"Missing required environment variable: {name}")
+    return value.strip()
+
+
+def get_reload_interval() -> float:
+    value = get_required_env("RELOAD_INTERVAL", str(DEFAULT_RELOAD_INTERVAL))
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError("RELOAD_INTERVAL must be a valid number") from exc
+
+    if parsed <= 0:
+        raise ValueError("RELOAD_INTERVAL must be greater than 0")
+
+    return parsed
+
+
+def get_login_wait_seconds() -> int:
+    value = os.getenv("LOGIN_WAIT_SECONDS", str(DEFAULT_LOGIN_WAIT_SECONDS)).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("LOGIN_WAIT_SECONDS must be a whole number of seconds") from exc
+
+    if parsed < 0:
+        raise ValueError("LOGIN_WAIT_SECONDS must be 0 or greater")
+
+    return parsed
+
+
+def get_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name, str(default)).strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def get_login_timeout_ms() -> int:
+    value = os.getenv("RESY_LOGIN_TIMEOUT_MS", str(DEFAULT_LOGIN_TIMEOUT_MS)).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("RESY_LOGIN_TIMEOUT_MS must be a whole number of milliseconds") from exc
+
+    if parsed <= 0:
+        raise ValueError("RESY_LOGIN_TIMEOUT_MS must be greater than 0")
+    return parsed
+
+
+def load_config() -> dict:
+    load_dotenv()
+
+    target_reservation_time = get_required_env("TARGET_RESERVATION_TIME", DEFAULT_TARGET_RESERVATION_TIME)
+    target_run_time = get_required_env("TARGET_RUN_TIME", DEFAULT_TARGET_RUN_TIME)
+    datetime.strptime(target_run_time, "%H:%M:%S")
+
+    return {
+        "TARGET_RESERVATION_TIME": target_reservation_time,
+        "TARGET_RUN_TIME": target_run_time,
+        "RELOAD_INTERVAL": get_reload_interval(),
+        "URL": get_required_env("URL", DEFAULT_URL),
+        "LOGIN_WAIT_SECONDS": get_login_wait_seconds(),
+        "HEADLESS": get_bool_env("RESY_HEADLESS", DEFAULT_HEADLESS),
+        "RESY_LOGIN_EMAIL": os.getenv("RESY_LOGIN_EMAIL", "").strip(),
+        "RESY_LOGIN_PASSWORD": os.getenv("RESY_LOGIN_PASSWORD", "").strip(),
+        "RESY_LOGIN_TIMEOUT_MS": get_login_timeout_ms(),
+    }
 
 
 ############################
@@ -117,11 +193,11 @@ def wait_for_post_confirm_success(page, timeout_ms=POST_CONFIRM_TIMEOUT_MS):
 ############################
 
 
-def wait_until_target():
+def wait_until_target(target_run_time):
     now = datetime.now()
     today = now.date()
 
-    target = datetime.strptime(TARGET_RUN_TIME, "%H:%M:%S").replace(
+    target = datetime.strptime(target_run_time, "%H:%M:%S").replace(
         year=today.year,
         month=today.month,
         day=today.day
@@ -137,94 +213,158 @@ def wait_until_target():
 # MAIN SCRIPT
 ############################
 
-with sync_playwright() as p:
-    browser = p.chromium.launch(
-        headless=False,
-        args=["--start-maximized"]
+
+def wait_for_login(config):
+    login_wait_seconds = config["LOGIN_WAIT_SECONDS"]
+
+    if login_wait_seconds > 0:
+        log(
+            "Waiting {} seconds for manual Resy login before continuing...".format(login_wait_seconds)
+        )
+        time.sleep(login_wait_seconds)
+        return
+
+    try:
+        input("Log into Resy in the browser, then press ENTER here to continue...")
+    except EOFError:
+        fallback = DEFAULT_LOGIN_WAIT_SECONDS
+        log(
+            "Interactive input is unavailable. Waiting {} seconds before continuing...".format(fallback)
+        )
+        time.sleep(fallback)
+
+
+def login_with_email_password(page, config):
+    timeout_ms = config["RESY_LOGIN_TIMEOUT_MS"]
+
+    page.locator('[data-test-id="menu_container-button-log_in"]').click(timeout=timeout_ms)
+
+    login_with_password_button = page.get_by_role("button", name="Log in with email & password")
+    if login_with_password_button.count() > 0:
+        login_with_password_button.first.click(timeout=timeout_ms)
+    else:
+        page.locator(".SmsViewSignInButton").first.click(timeout=timeout_ms)
+
+    page.locator("#email").fill(config["RESY_LOGIN_EMAIL"], timeout=timeout_ms)
+    page.locator("#password").fill(config["RESY_LOGIN_PASSWORD"], timeout=timeout_ms)
+    page.locator('form[name="login_form"] button[type="submit"]').click(timeout=timeout_ms)
+
+    page.locator('[data-test-id="menu_container-button-profile_photo"]').wait_for(
+        state="visible",
+        timeout=timeout_ms
     )
-    context = browser.new_context(viewport={"width": 1920, "height": 1080})
-    page = context.new_page()
 
-    log("Opening venue page")
-    page.goto(URL)
 
-    input("Log into Resy in the browser, then press ENTER here to continue...")
+def main():
+    config = load_config()
+    log(
+        "Loaded config: "
+        f"TARGET_RESERVATION_TIME={config['TARGET_RESERVATION_TIME']}, "
+        f"TARGET_RUN_TIME={config['TARGET_RUN_TIME']}, "
+        f"RELOAD_INTERVAL={config['RELOAD_INTERVAL']}, "
+        f"URL={config['URL']}, "
+        f"LOGIN_WAIT_SECONDS={config['LOGIN_WAIT_SECONDS']}, "
+        f"HEADLESS={config['HEADLESS']}, "
+        f"AUTO_LOGIN={'enabled' if config['RESY_LOGIN_EMAIL'] and config['RESY_LOGIN_PASSWORD'] else 'disabled'}"
+    )
 
-    wait_until_target()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=config["HEADLESS"],
+            args=["--start-maximized"]
+        )
+        context = browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = context.new_page()
 
-    log("Starting reservation search")
+        log("Opening venue page")
+        page.goto(config["URL"])
 
-    while True:
+        if config["RESY_LOGIN_EMAIL"] and config["RESY_LOGIN_PASSWORD"]:
+            log("Attempting automated login using email/password")
+            login_with_email_password(page, config)
+            log("Automated login completed")
+        else:
+            log("Automated login not configured; falling back to manual login flow")
+            wait_for_login(config)
 
-        page.reload()
+        wait_until_target(config["TARGET_RUN_TIME"])
 
-        # wait for reservation buttons to render
-        try:
-            page.wait_for_selector(".ReservationButton", timeout=5000)
-        except PlaywrightTimeoutError:
-            log("Reservation buttons not found, retrying...")
-            time.sleep(RELOAD_INTERVAL)
-            continue
+        log("Starting reservation search")
 
-        slots = page.locator(".ReservationButton")
-        count = slots.count()
-        log(f"Checking {count} available slots")
+        while True:
 
-        found = False
-        for i in range(count):
-            slot = slots.nth(i)
-            time_text = slot.locator(".ReservationButton__time").inner_text().strip()
+            page.reload()
 
-            if time_text == TARGET_RESERVATION_TIME:
-                log(f"Found target slot {TARGET_RESERVATION_TIME}")
-                slot.click()
-                log("Clicked reservation time")
-                found = True
-                break
-
-        if found:
-            log("Waiting for Reserve Now button in page/iframe")
-
-            reserve_selector = '[data-test-id="order_summary_page-button-book"]'
-            context_name, booking_context, reserve_button = find_visible_button_context(
-                page,
-                reserve_selector,
-                timeout_ms=20000
-            )
-
-            if reserve_button is None:
-                log("Could not find a visible Reserve Now button")
+            # wait for reservation buttons to render
+            try:
+                page.wait_for_selector(".ReservationButton", timeout=5000)
+            except PlaywrightTimeoutError:
+                log("Reservation buttons not found, retrying...")
+                time.sleep(config["RELOAD_INTERVAL"])
                 continue
 
-            context_url = booking_context.url if context_name == "frame" else page.url
-            log(f"Found Reserve Now in {context_name}: {context_url}")
+            slots = page.locator(".ReservationButton")
+            count = slots.count()
+            log(f"Checking {count} available slots")
 
-            reserve_button.wait_for(state="visible", timeout=15000)
-            click_with_fallback(reserve_button)
-            log("Clicked Reserve Now")
+            found = False
+            for i in range(count):
+                slot = slots.nth(i)
+                time_text = slot.locator(".ReservationButton__time").inner_text().strip()
 
-            # The confirm step reuses the same selector in many Resy flows.
-            _, _, confirm_button = find_visible_button_context(
-                page,
-                reserve_selector,
-                timeout_ms=10000
-            )
-            if confirm_button is None:
-                log("Confirm button not visible after Reserve Now click")
-                continue
+                if time_text == config["TARGET_RESERVATION_TIME"]:
+                    log(f"Found target slot {config['TARGET_RESERVATION_TIME']}")
+                    slot.click()
+                    log("Clicked reservation time")
+                    found = True
+                    break
 
-            confirm_button.wait_for(state="visible", timeout=10000)
-            click_with_fallback(confirm_button)
-            log("Clicked Confirm Reservation")
+            if found:
+                log("Waiting for Reserve Now button in page/iframe")
 
-            if wait_for_post_confirm_success(page):
-                log("Reservation confirmed by post-confirm verification checks")
-                browser.close()
-                exit()
+                reserve_selector = '[data-test-id="order_summary_page-button-book"]'
+                context_name, booking_context, reserve_button = find_visible_button_context(
+                    page,
+                    reserve_selector,
+                    timeout_ms=20000
+                )
 
-            log("Post-confirm verification did not detect success; leaving browser open for manual check")
-            page.pause()
+                if reserve_button is None:
+                    log("Could not find a visible Reserve Now button")
+                    continue
+
+                context_url = booking_context.url if context_name == "frame" else page.url
+                log(f"Found Reserve Now in {context_name}: {context_url}")
+
+                reserve_button.wait_for(state="visible", timeout=15000)
+                click_with_fallback(reserve_button)
+                log("Clicked Reserve Now")
+
+                # The confirm step reuses the same selector in many Resy flows.
+                _, _, confirm_button = find_visible_button_context(
+                    page,
+                    reserve_selector,
+                    timeout_ms=10000
+                )
+                if confirm_button is None:
+                    log("Confirm button not visible after Reserve Now click")
+                    continue
+
+                confirm_button.wait_for(state="visible", timeout=10000)
+                click_with_fallback(confirm_button)
+                log("Clicked Confirm Reservation")
+
+                if wait_for_post_confirm_success(page):
+                    log("Reservation confirmed by post-confirm verification checks")
+                    browser.close()
+                    exit()
+
+                log("Post-confirm verification did not detect success; leaving browser open for manual check")
+                page.pause()
+
+            log("Target slot not found yet")
+            time.sleep(config["RELOAD_INTERVAL"])
 
 
-        log("Target slot not found yet")
-        time.sleep(RELOAD_INTERVAL)
+if __name__ == "__main__":
+    main()
