@@ -32,6 +32,9 @@ For Docker usage, configure these values as environment variables:
 - `LOGIN_WAIT_SECONDS` — login wait mode for Docker script:
   - `0`: show interactive `press ENTER when logged in` prompt
   - `>0`: skip prompt and wait fixed seconds (default `120`)
+- `RESY_HEADLESS` — launch Chromium in headless mode (`true`/`false`, default `true`)
+- `RESY_LOGIN_EMAIL` / `RESY_LOGIN_PASSWORD` — optional credentials for automated login
+- `RESY_LOGIN_TIMEOUT_MS` — timeout for login element interactions (default `15000`)
 
 `reserve_docker.py` validates and loads these values at startup.
 
@@ -74,7 +77,7 @@ export DISPLAY=${DISPLAY:-:0}
 xhost +local:root
 ```
 
-This is required because the script launches Chromium in headed mode (`headless=False`) for manual login.
+This is required only if you run headed mode (`RESY_HEADLESS=false`) and need GUI access.
 
 ### 3) Build and run
 
@@ -110,6 +113,7 @@ Both scripts perform the same booking flow:
 ## Notes / Caveats
 
 - Manual login is still required.
-- Headless mode is intentionally disabled because booking reliability is usually better in headed mode.
+- Scripted login is optional in Docker mode when `RESY_LOGIN_EMAIL` and `RESY_LOGIN_PASSWORD` are set.
+- Headless mode is enabled by default for Docker runs (`RESY_HEADLESS=true`).
 - Resy selectors/flows may change over time.
 - Use responsibly and comply with Resy Terms of Service and venue policies.
