@@ -13,6 +13,8 @@ DEFAULT_TARGET_RUN_TIME = "21:30:20"   # 24hr time when reservations open
 DEFAULT_RELOAD_INTERVAL = 0.75          # seconds between refresh attempts
 DEFAULT_URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
 DEFAULT_LOGIN_WAIT_SECONDS = 120
+DEFAULT_HEADLESS = True
+DEFAULT_LOGIN_TIMEOUT_MS = 15000
 
 # How long to wait for confirmation after clicking final confirm.
 POST_CONFIRM_TIMEOUT_MS = 20000
@@ -58,6 +60,28 @@ def get_login_wait_seconds() -> int:
 
     return parsed
 
+
+def get_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name, str(default)).strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def get_login_timeout_ms() -> int:
+    value = os.getenv("RESY_LOGIN_TIMEOUT_MS", str(DEFAULT_LOGIN_TIMEOUT_MS)).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("RESY_LOGIN_TIMEOUT_MS must be a whole number of milliseconds") from exc
+
+    if parsed <= 0:
+        raise ValueError("RESY_LOGIN_TIMEOUT_MS must be greater than 0")
+    return parsed
+
+
 def load_config() -> dict:
     target_reservation_time = get_required_env("TARGET_RESERVATION_TIME", DEFAULT_TARGET_RESERVATION_TIME)
     target_run_time = get_required_env("TARGET_RUN_TIME", DEFAULT_TARGET_RUN_TIME)
@@ -69,6 +93,10 @@ def load_config() -> dict:
         "RELOAD_INTERVAL": get_reload_interval(),
         "URL": get_required_env("URL", DEFAULT_URL),
         "LOGIN_WAIT_SECONDS": get_login_wait_seconds(),
+        "HEADLESS": get_bool_env("RESY_HEADLESS", DEFAULT_HEADLESS),
+        "RESY_LOGIN_EMAIL": os.getenv("RESY_LOGIN_EMAIL", "").strip(),
+        "RESY_LOGIN_PASSWORD": os.getenv("RESY_LOGIN_PASSWORD", "").strip(),
+        "RESY_LOGIN_TIMEOUT_MS": get_login_timeout_ms(),
     }
 
 
@@ -203,6 +231,27 @@ def wait_for_login(config):
         time.sleep(fallback)
 
 
+def login_with_email_password(page, config):
+    timeout_ms = config["RESY_LOGIN_TIMEOUT_MS"]
+
+    page.locator('[data-test-id="menu_container-button-log_in"]').click(timeout=timeout_ms)
+
+    login_with_password_button = page.get_by_role("button", name="Log in with email & password")
+    if login_with_password_button.count() > 0:
+        login_with_password_button.first.click(timeout=timeout_ms)
+    else:
+        page.locator(".SmsViewSignInButton").first.click(timeout=timeout_ms)
+
+    page.locator("#email").fill(config["RESY_LOGIN_EMAIL"], timeout=timeout_ms)
+    page.locator("#password").fill(config["RESY_LOGIN_PASSWORD"], timeout=timeout_ms)
+    page.locator('form[name="login_form"] button[type="submit"]').click(timeout=timeout_ms)
+
+    page.locator('[data-test-id="menu_container-button-profile_photo"]').wait_for(
+        state="visible",
+        timeout=timeout_ms
+    )
+
+
 def main():
     config = load_config()
     log(
@@ -211,19 +260,22 @@ def main():
         f"TARGET_RUN_TIME={config['TARGET_RUN_TIME']}, "
         f"RELOAD_INTERVAL={config['RELOAD_INTERVAL']}, "
         f"URL={config['URL']}, "
-        f"LOGIN_WAIT_SECONDS={config['LOGIN_WAIT_SECONDS']}"
+        f"LOGIN_WAIT_SECONDS={config['LOGIN_WAIT_SECONDS']}, "
+        f"HEADLESS={config['HEADLESS']}, "
+        f"AUTO_LOGIN={'enabled' if config['RESY_LOGIN_EMAIL'] and config['RESY_LOGIN_PASSWORD'] else 'disabled'}"
     )
 
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch(
-                headless=False,
+                headless=config["HEADLESS"],
                 args=["--start-maximized"]
             )
         except Exception as exc:
+            mode = "headless" if config["HEADLESS"] else "headed"
             raise RuntimeError(
-                "Failed to launch headed Chromium. Ensure Docker can access your X server "
-                "(for example: export DISPLAY=:0 && xhost +local:root)."
+                "Failed to launch Chromium in {} mode. If running headed in Docker, ensure X server access "
+                "(for example: export DISPLAY=:0 && xhost +local:root).".format(mode)
             ) from exc
         context = browser.new_context(viewport={"width": 1920, "height": 1080})
         page = context.new_page()
@@ -231,7 +283,13 @@ def main():
         log("Opening venue page")
         page.goto(config["URL"])
 
-        wait_for_login(config)
+        if config["RESY_LOGIN_EMAIL"] and config["RESY_LOGIN_PASSWORD"]:
+            log("Attempting automated login using email/password")
+            login_with_email_password(page, config)
+            log("Automated login completed")
+        else:
+            log("Automated login not configured; falling back to manual login flow")
+            wait_for_login(config)
 
         wait_until_target(config["TARGET_RUN_TIME"])
 
