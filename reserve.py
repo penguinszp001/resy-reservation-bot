@@ -9,12 +9,12 @@ import os
 # CONFIG
 ############################
 
-DEFAULT_TARGET_RESERVATION_TIME = "8:30 PM"
-DEFAULT_TARGET_RUN_TIME = "21:30:20"   # 24hr time when reservations open
+DEFAULT_TARGET_RESERVATION_TIME = "6:00 PM"
+DEFAULT_TARGET_RUN_TIME = "12:00:00"   # 24hr time when reservations open
 DEFAULT_RELOAD_INTERVAL = 0.75          # seconds between refresh attempts
-DEFAULT_URL = "https://resy.com/cities/boston-ma/venues/spiga?date=2026-03-18&seats=2"
+DEFAULT_URL = "https://resy.com/cities/boston-ma/venues/tonino?date=2026-07-02&seats=4"
 DEFAULT_LOGIN_WAIT_SECONDS = 120
-DEFAULT_HEADLESS = True
+DEFAULT_HEADLESS = False
 DEFAULT_LOGIN_TIMEOUT_MS = 15000
 
 # How long to wait for confirmation after clicking final confirm.
